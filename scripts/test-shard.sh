@@ -77,6 +77,9 @@ receipts_init unit
 # event. reconcile-crash-*.slow.test.ts (244s) is not duplicated here: the
 # persistence-validation invariants job already runs it on PGLite for every
 # event, before and after activation.
+# write-gate-perf.slow.test.ts (#6430) times the shipped gate, so it runs once
+# per event in its own slow-entity-resolve-perf step without --coverage:
+# coverage instrumentation slowed the gate it measures.
 # evals/ is included: its *.test.ts files (eval-harness unit tests) were
 # previously collected by NO runner — 45+ real tests never executed anywhere.
 # Every collected evals file must be KEYLESS (no API keys, no network) —
@@ -90,6 +93,7 @@ ALL_FILES=$(find test evals -name '*.test.ts' \
   -not -name 'eval-brainbench-e2e.slow.test.ts' \
   -not -name 'export-scale.slow.test.ts' \
   -not -name 'reconcile-crash-*.slow.test.ts' \
+  -not -name 'write-gate-perf.slow.test.ts' \
   -not -path 'test/e2e/*' | sort)
 
 if [ -z "$ALL_FILES" ]; then

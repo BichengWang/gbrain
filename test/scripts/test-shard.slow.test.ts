@@ -106,6 +106,22 @@ describe('test-shard.sh — exclusion contract', () => {
       step.run?.includes('test/reconcile-crash-*.slow.test.ts'))).toBe(true);
   });
 
+  it('runs write-gate-perf exactly once per event, outside the matrix and without coverage (#6430)', () => {
+    const allFiles = [1, 2, 3, 4].flatMap(s => dryRunList(s, 4));
+    expect(allFiles).not.toContain('test/write-gate-perf.slow.test.ts');
+    const fs = require('fs');
+    const yaml = require('js-yaml');
+    const steps: Array<{ job: string; run: string }> = [];
+    for (const file of fs.readdirSync(resolve(REPO_ROOT, '.github/workflows')).filter((f: string) => /\.ya?ml$/.test(f))) {
+      const workflow = yaml.load(fs.readFileSync(resolve(REPO_ROOT, '.github/workflows', file), 'utf8'));
+      for (const [job, def] of Object.entries<{ steps?: Array<{ run?: string }> }>(workflow.jobs ?? {}))
+        for (const step of def.steps ?? []) if (step.run?.includes('write-gate-perf.slow.test.ts')) steps.push({ job: `${file}:${job}`, run: step.run });
+    }
+    expect(steps.map(s => s.job)).toEqual(['test.yml:slow-entity-resolve-perf']);
+    expect(steps[0]!.run).toContain('bun test test/write-gate-perf.slow.test.ts');
+    expect(steps[0]!.run).not.toContain('--coverage');
+  });
+
   it('INCLUDES *.slow.test.ts files (CI matrix is where slow files run)', () => {
     const allFiles = [1, 2, 3, 4].flatMap(s => dryRunList(s, 4));
     const slowFiles = allFiles.filter(f => /\.slow\.test\.ts$/.test(f));

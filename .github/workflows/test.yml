@@ -611,6 +611,12 @@ jobs:
         env:
           GBRAIN_TEST_EXPORT_SCALE_PAGES: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && '10001' || '100001' }}
           GBRAIN_TEST_RECEIPT_DIR: ${{ runner.temp }}/receipts
+      # #6430: the write-gate p95 budget times shipped code, so this step runs
+      # without --coverage (instrumentation inflated the gate it measures).
+      # It is the file's only CI run (scripts/test-shard.sh excludes it).
+      - run: bash scripts/run-with-receipt.sh slow write-gate-perf -- bun test test/write-gate-perf.slow.test.ts --timeout=300000
+        env:
+          GBRAIN_TEST_RECEIPT_DIR: ${{ runner.temp }}/receipts
       - name: Write coverage lane manifest
         run: |
           printf '{"lane":"slowperf","sha":"%s","lcovCount":%s,"complete":true}\n' \
