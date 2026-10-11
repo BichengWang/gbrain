@@ -10,7 +10,7 @@ credits are retained; no result has been reassigned to another provider. Origina
 identifiers and attribution are available in the pre-removal Git revision
 `6040075c6cb95be5881cc2e1b76ef7d71f4e5d29` (retained on 2026-09-23).
 
-## [0.60.167.0] - 2026-10-11
+## [0.60.169.0] - 2026-10-11
 
 **Fix wave 14, part 1: the big-brain memory blowups stop, a renamed page keeps its history, and `gbrain init` tells you who is blocking it instead of hanging.**
 
@@ -56,13 +56,14 @@ Eleven reports from large brains, managed checkouts and the schema tooling. Each
 - `postgres-engine/schema-lock-timeout.ts`: session-level `lock_timeout` on the reserved DDL backend restored on release, `SET LOCAL` inside transaction-wrapped migrations, `pg_blocking_pids()` sampling on a one-backend diagnostic connection, `schema_lock_blocked` registry row; conditional `ENABLE ROW LEVEL SECURITY` in `schema.sql` and eight fragment schemas; `init-schema-retry` retries SQLSTATE 55P03; the v24 RLS E2E test calls `runMigrationSQL` directly and the remaining `init` spawns dump `pg_stat_activity` at half their budget (#5227).
 
 Contributed by @andreineacsu (#5517 diagnosis of #5491).
-## [0.60.166.0] - 2026-10-11
+
+## [0.60.168.0] - 2026-10-11
 
 **Wave 14 PR4: the Google connector, open loops, contacts, calendar, Windows and polish.** Gmail loops now find the person page wherever it lives in the brain, extraction runs under a daily spend cap and your own label exclusions, contacts land next to your people pages, and three Windows reports (parked tests, console windows, backups) get native coverage on CI.
 
 ### Google connector and open loops
 
-- **Loops find the person across sources (#5504).** A Gmail source's loop names someone whose page lives in `default:people/<slug>`; resolution now runs in the mail's own source first and then across sources by identity only (the exact email as a page alias, or an `entity_identities` canonical member; names never cross, ties stay unresolved). The loop row records the page's source (`open_loops.counterparty_source_id`, migration `open_loops_counterparty_source`, v236), the `owes_to` / `awaiting_reply_from` edge points there, and the entity card, `gbrain waiting` and `open_loops` read the loop from that page and never from a namesake in another source. The commitment fact stays in the connector source.
+- **Loops find the person across sources (#5504).** A Gmail source's loop names someone whose page lives in `default:people/<slug>`; resolution now runs in the mail's own source first and then across sources by identity only (the exact email as a page alias, or an `entity_identities` canonical member; names never cross, ties stay unresolved). The loop row records the page's source (`open_loops.counterparty_source_id`, migration `open_loops_counterparty_source`, v237), the `owes_to` / `awaiting_reply_from` edge points there, and the entity card, `gbrain waiting` and `open_loops` read the loop from that page and never from a namesake in another source. The commitment fact stays in the connector source.
 - **Daily spend cap on loop extraction.** `loops.extraction_max_usd_per_day` (default $2.00, per UTC day, brain-wide): every `loops_extract` job a sweep or the managed catch-up queues shares the day's spend group through the job spend envelope; an attempt the cap cannot admit is refused before the provider call and a sweep at the cap queues nothing (`daily_spend_cap`; `spend_cap_zero` when the user set 0).
 - **Your own label exclusions (#5445).** Per-source `g_loops_exclude_labels` (`gbrain sources add … --loops-exclude-labels`) with the brain-wide `loops.extraction_exclude_labels` as the fallback; label names are resolved once per sweep and gate all three eligibility sites, the execution-time check and grace-hold publication, plus the deterministic detector. A name that does not resolve fails closed for new paid extraction (`excluded_label_unresolved`, visible in the sweep counters and retried every sweep). Contributed by @furuchanchan. Supersedes #5524.
 - **Contacts next to your own people (#4845, #6158).** `g_contacts_dir` (default `people`, `--contacts-dir`) decides where a Google contact page renders; an existing page is renamed in place (import the new path, then retire the old one). A connector stub yields to its canonical twin in another source under `link_resolution.cross_source`, and doctor `junk_entity_hubs` names the twin and the exact remedy instead of an open policy question.
@@ -95,6 +96,36 @@ Contributed by @andreineacsu (#5517 diagnosis of #5491).
 ### For contributors
 
 - New tests: `test/loops-counterparty-null-entity.test.ts` (+ Postgres arm), `test/loops-exclusion.test.ts`, `test/loops-extract-spend-cap.test.ts`, `test/db-lock-token-predicate.test.ts` (+ Postgres arm, in the PgBouncer matrix), `test/backup-archive-roundtrip-5312.test.ts`, `test/spawn-windows-hide.test.ts`, `test/scripts/windows-hide-guard.test.ts`, `test/windows-hidden-console.test.ts`. The `add_link` per-endpoint source parameters were deferred (the composite-key path is not cleanly scoped yet).
+## [0.60.167.0] - 2026-10-11
+
+**`recall` can rank saved facts by a question.** Pass `question` and recall returns the facts most relevant to it, each with a `relevance` score, instead of the newest ones. Facts below the match threshold are left out, so an empty list means nothing saved matches.
+
+Calls without `question` behave as before and return the newest facts; every response now says which order it used in `facts_order`. A call that passes only `query` carries a `recall_hint` notice naming `question` and the exact retry call. `gbrain recall --question "<q>"` works from the CLI, locally or against a remote brain. Ranking uses the same read policy as every other recall: the trust floor, quarantine and rederive hiding, remote world-only facts and the private-page filter all apply. Restart a resident `gbrain serve` after upgrading so agents see the new parameter.
+
+## To take advantage of v0.60.166.0
+
+`gbrain upgrade` applies the facts index migration (v236) automatically. If `gbrain doctor` warns about a partial migration, run `gbrain apply-migrations --yes`, then restart a resident `gbrain serve`.
+
+### Itemized changes
+
+- **`recall` `question`** (`facts/question-recall.ts`, `ops/facts.ts`). Up to 2,000 characters; refused with `supersessions` or `include_expired`, with the corrected call in the error. Works with `entity`, `session_id`, `since`, `grep` and every other fact filter, which apply before ranking. The question is embedded once through the gateway's query-embedding cache, so a `query` of the same text in the same process costs no second provider call. Without an embedding provider, or with embeddings turned off, facts rank by word match and `facts_degraded.reason` says so; facts without an embedding are counted in `facts_degraded.unembedded`, with a `facts_unembedded` notice whose fix previews `gbrain embed --stale --facts` before any paid run.
+- **Admission rule** (`recall.question_admission`). `reserve` (default) keeps a fact at cosine 0.5 or a third of the question's words; `facts_arm` uses the stricter facts-arm rule.
+- **Shared fact scorer** (`search/fact-relevance.ts`). Recall's `question`, the temporal fact reserve and the facts arm now read one candidate pool and one scorer. Word matches are whole-word, and a very long fact's matches count for less. In `query`, facts of an entity the question names come only from that entity page's own source.
+- **`gbrain recall --question`** reads its value as the question; before, it was taken as an entity name.
+- **Fast on large brains.** On a 100k-fact brain a ranked recall takes 51 ms at p95 on Postgres (65 ms for a remote caller, 10 ms with `entity`) and 152 ms on PGLite (139 ms remote, 54 ms with `entity`). The facts index migration (v236) adds a keyword index over active facts (built under `GBRAIN_FTS_LANGUAGE`; `gbrain reindex-search-vector` rebuilds it when the language changes) and two small indexes for the unembedded count; the vector, keyword and entity lookups run concurrently, the vector lookup now uses the facts HNSW index, and the keyword lookup is planned per call. Building the indexes reads each fact once (about 2 seconds per 100k facts) and rewrites none.
+- **Embedding model switches keep fact indexes.** A dimension change rebuilds `facts.embedding` and now re-creates the btree indexes that read it instead of dropping them.
+
+### For contributors
+
+- `test/recall-question.test.ts` covers ranking, the parameter contract, the read policy (local, remote and private-sourced facts), the degraded paths, `recall_hint` and the embedding cache on PGLite, and on Postgres through `test/e2e/recall-question-postgres.test.ts`. `test/fact-relevance.test.ts` pins the scorer; `test/recall-question-cli.test.ts` the CLI.
+
+## [0.60.166.0] - 2026-10-11
+
+**Fixes a flaky managed-sync governor test that turned master red after v0.60.165.0.**
+
+### Itemized changes
+
+- `test/sync-drain-no-admission.test.ts` "a pass that commits keeps the governor quiet" failed when the event loop stalled 60 ms or more at pass start (or one 25 ms timer fired late), so the governor's 10 ms interval woke first and stopped the pass before the first commit. The drain now takes an injected clock (`DrainInput.clock`, test seam, default `Date.now`), and the test advances it 25 ms per committed page while the governor keeps ticking on real timers. The assertion is unchanged. Two forced probes are now part of the test: an 80 ms synchronous loop stall at pass start (failed the old test 5/5) and an 85 ms real delay before the first page (failed it 3/3). A new control test shows the same governor still stops `no_admission` once the clock passes the window before a commit. The file's two hung-pass tests only wait for a stop, so a late timer cannot fail them.
 ## [0.60.165.0] - 2026-10-11
 
 **Managed sync stops instead of hanging, a database publish that never finishes is cancelled and retried, and managed brains write meeting timelines and extracted entities through the coordinator.**
