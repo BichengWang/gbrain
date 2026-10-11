@@ -18,6 +18,7 @@ identifiers and attribution are available in the pre-removal Git revision
 
 - `test/write-gate-perf.slow.test.ts` (#6430) runs once per CI event in its own step of the `slow-entity-resolve-perf` job without `--coverage`, and `scripts/test-shard.sh` leaves it out of the unit matrix. Coverage instrumentation slowed the gate it measures, which made the 5 ms p95 budget fail on hypervisor-steal spikes. `BUDGET_MS`, `RATIO_LIMIT` and the quiet tolerance are unchanged. `test/scripts/test-shard.slow.test.ts` pins the file to exactly one workflow step with no `--coverage`.
 - `test/scripts/ci-gates.test.ts` requires every slow file left out of the shards to also run in e2e.yml's nightly coverage-collection lane. write-gate-perf is the one named exception: it still runs on every pull request, push and schedule in test.yml's own no-coverage step, and the guard pins that it never appears in the coverage lane.
+
 ## [0.60.169.0] - 2026-10-11
 
 **`recall` can rank saved facts by a question.** Pass `question` and recall returns the facts most relevant to it, each with a `relevance` score, instead of the newest ones. Facts below the match threshold are left out, so an empty list means nothing saved matches.
