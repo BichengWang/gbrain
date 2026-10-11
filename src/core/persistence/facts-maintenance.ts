@@ -48,6 +48,8 @@ export interface ManagedFactIntent extends Record<string, unknown> {
   expected_revision?: string; facts?: FrozenExtractedFact[]; children?: string[];
   /** Direct single-fact writes keep writeSingleFact's supersession rule. */
   supersede?: true;
+  /** Automatic extraction skips withdrawn candidates; direct fact writes still refuse them. */
+  skipWithdrawn?: true;
   /**
    * writeSingleFact only: a `memory/unattributed` row keeps the resolver's
    * fallback slug as its entity (no row number), so dedup stays per entity.
@@ -408,6 +410,7 @@ export async function publishManagedFacts(engine: BrainEngine, session: ManagedF
       inputDigest: session.inputDigest, origin: session.origin, originalRequestId: session.originalRequestId,
       embedding: session.embedding ?? null, ...(options.supersede ? { supersede: true as const } : {}),
       ...(options.attributeFallback ? { attribute_fallback: true as const } : {}),
+      ...(!options.explicitContext && !options.supersede ? { skipWithdrawn: true as const } : {}),
       ...(session.captureSource ? { capture_source: session.captureSource } : {}),
       ...(session.derivation ? { derivation: session.derivation } : {}),
       ...(snapshot ? { expected_revision: snapshot.revision } : {}), facts: group } });

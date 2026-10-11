@@ -8,6 +8,7 @@ import type { RegistryCode } from '../error-registry.ts';
 import { parseFactsFence, upsertFactRow, formatFenceDate, renderFactsTable, replaceOrInsertFactsFence } from '../facts-fence.ts';
 import { serializePageToMarkdown } from '../markdown.ts';
 import { assertFactNotWithdrawn, decideSingleFact, type FactCandidate } from '../facts/single-prepare.ts';
+import { assertFactNotPurged, isFactWithdrawn } from '../facts/withdrawal.ts';
 import { extractFactsFromFenceText } from '../facts/extract-from-fence.ts';
 import { authorizeWrite } from './authority.ts';
 import { authorizePageVisibility } from './page-visibility.ts';
@@ -116,14 +117,16 @@ export async function prepareManagedFactsMutation(engine: BrainEngine, row: Writ
   const additionalPageKeys = p.origin ? [{ sourceId: row.source_id, slug: p.origin.slug }] : [];
   if (p.kind === 'managed_facts_complete') return { observedRevision: null, noop: true, additionalPageKeys, validate, apply: async tx => {
     const children = p.children ?? [];
-    const done = await tx.executeRaw<{ outcome: { inserted?: number; duplicate?: number; fact_ids?: number[] } }>(`SELECT outcome FROM persistence_requests WHERE id=ANY($1::uuid[]) AND source_incarnation=$2::uuid
+    const done = await tx.executeRaw<{ outcome: { inserted?: number; duplicate?: number; fact_ids?: number[]; withdrawnSkipped?: number } }>(`SELECT outcome FROM persistence_requests WHERE id=ANY($1::uuid[]) AND source_incarnation=$2::uuid
       AND state='committed' AND COALESCE(intent->>'batchKey',outcome->>'batch_key')=$3 AND operation='extract_facts'`, [children, row.source_incarnation, p.batchKey]);
     if (done.length !== children.length) throw factsRefusal('revision_conflict', 'Some extracted facts have not committed.', row,
       `${children.length - done.length} of the batch's ${children.length} per-entity fact requests have not committed, so the extraction cannot be recorded as complete.`,
       'once the entity requests are final, run extract_facts again for the same turn with a new request_id only if facts are still missing.');
+    const withdrawnSkipped = done.reduce((sum, item) => sum + Number(item.outcome.withdrawnSkipped ?? 0), 0);
     return { status: 'completed', entity_requests: children.length, kind: p.kind, batch_key: p.batchKey, input_digest: p.inputDigest,
       inserted: done.reduce((sum, item) => sum + Number(item.outcome.inserted ?? 0), 0),
       duplicate: done.reduce((sum, item) => sum + Number(item.outcome.duplicate ?? 0), 0),
+      ...(withdrawnSkipped ? { withdrawnSkipped } : {}),
       fact_ids: done.flatMap(item => item.outcome.fact_ids ?? []) };
   } };
   const snapshot = await engine.readPageSnapshot(row.slug, { sourceId: row.source_id, includeDeleted: true });
@@ -152,8 +155,15 @@ export async function prepareManagedFactsMutation(engine: BrainEngine, row: Writ
   const taint = await managedFactsTrust(engine, p);
   const gateCfg = taint ? await derivedGateConfig(engine) : null;
   const blocked: GatedRowDecision[] = [];
+  let withdrawnSkipped = 0;
   for (const fact of facts) {
-    await assertFactNotWithdrawn(engine, row.source_id, fact);
+    if (p.skipWithdrawn === true) {
+      await assertFactNotPurged(engine, row.source_id, fact);
+      if (await isFactWithdrawn(engine, row.source_id, fact.visibility, fact.fact, fact.entity_slug)) {
+        withdrawnSkipped++;
+        continue;
+      }
+    } else await assertFactNotWithdrawn(engine, row.source_id, fact);
     const key = JSON.stringify([fact.fact, fact.visibility, fact.entity_slug]);
     const earlier = (seen.get(key) ?? []).find(i => attributionCompatible(entries[i].fact.attributed_to, fact.attributed_to));
     if (earlier !== undefined) { entries.push({ fact, duplicateId: null, duplicateOf: earlier }); continue; }
@@ -238,6 +248,7 @@ export async function prepareManagedFactsMutation(engine: BrainEngine, row: Writ
       const write_gate = emptyGateTally();
       for (const gate of blocked) await applyGateDecision(tx, gate, { table: 'facts', sourceId: row.source_id }, async () => null, write_gate);
       return { status: 'completed', inserted, duplicate: entries.length - inserted, superseded, fact_ids: ids, ...(blocked.length ? { write_gate } : {}),
+        ...(withdrawnSkipped ? { withdrawnSkipped } : {}),
         fenced: page !== undefined, kind: p.kind, batch_key: p.batchKey, input_digest: p.inputDigest,
         ...(page && target?.fixes.length ? { fences_normalized: pageFencesNormalized({ sourceId: row.source_id, slug: row.slug, fixes: target.fixes,
           writer: row.principal_kind, path: snapshot?.page.source_path ?? null, remote: row.authority.remote }) } : {}) };

@@ -104,6 +104,14 @@ and [isolated local backup guide](in-agent-setup.md#6-back-up-the-complete-local
 the same source and visibility, and its row is struck in the page's Markdown.
 The text stays in the row, the file, page history and backups.
 
+Automatic extraction skips candidates already covered by a withdrawal and
+continues with unrelated facts in the same entity group. Managed
+entity and completion write receipts count these skips as `withdrawnSkipped`,
+not active duplicates. An all-withdrawn group completes with no inserted facts.
+Explicit `remember` still refuses the withdrawn claim; a withdrawal committed
+after preparation still refuses the prepared write instead of resurrecting it.
+Purge tombstones still refuse the entire write with `purged_content`.
+
 `gbrain forget <id> --purge` **purges**: an owner-only command on the brain
 host that removes the claim from the live stores gbrain controls and returns a
 receipt. It is a separate operation (`purge_fact`), never a mode of the

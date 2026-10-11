@@ -11,6 +11,8 @@ import { resetPgliteState } from './helpers/reset-pglite.ts';
 import { withEnv } from './helpers/with-env.ts';
 import { factContractCases, exerciseManagedFacts } from './helpers/managed-facts-contract.ts';
 import { writeFactsToFence } from '../src/core/facts/fence-write.ts';
+import { recordFactWithdrawal } from '../src/core/facts/withdrawal.ts';
+import { registerLocalWriter } from '../src/core/persistence/identity.ts';
 
 let engine: PGLiteEngine;
 beforeAll(async () => { engine = new PGLiteEngine(); await engine.connect({}); await engine.initSchema(); }, 60_000);
@@ -95,6 +97,66 @@ test('managed extract_facts publishes multiple private entity fences and replays
       const replay = await operationsByName.extract_facts.handler(ctx, params);
       expect(replay).toMatchObject({ inserted: 2, fact_ids: first.fact_ids });
       expect(calls).toBe(1);
+    });
+  } finally { await disposePersistenceConsumer(engine); rmSync(home, { recursive: true, force: true }); }
+}, 60_000);
+
+for (const includeNovel of [true, false]) test(`managed extraction skips withdrawn claims and completes, novel=${includeNovel}`, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'gbrain-managed-withdrawal-'));
+  try {
+    await withEnv({ GBRAIN_HOME: home }, async () => {
+      const slug = 'people/alice-example';
+      const withdrawn = 'Alice-example prefers the synthetic blue workshop.';
+      const novel = 'Alice-example reserved the synthetic green room.';
+      await engine.putPage(slug, { type: 'person', title: 'Alice-example', compiled_truth: 'A registered synthetic person.' }, { sourceId: 'default' });
+      const saved = await engine.insertFact({ fact: withdrawn, entity_slug: slug, visibility: 'world', kind: 'fact', source: 'fixture' }, { source_id: 'default' });
+      await recordFactWithdrawal(engine, saved.id, 'default', false, { semanticReview: false });
+      await engine.executeRaw('UPDATE persistence_brain SET enabled=true WHERE singleton=1');
+      let calls = 0;
+      __setChatTransportForTests(async () => {
+        calls++;
+        return { text: JSON.stringify({ facts: (includeNovel ? [withdrawn, novel] : [withdrawn]).map(fact =>
+          ({ fact, entity: slug, kind: 'fact', confidence: 1, notability: 'medium' })) }),
+        blocks: [], stopReason: 'end', usage: { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0 }, model: 'test:stub', providerId: 'test' };
+      });
+      const ctx = { engine, config: { engine: 'pglite' as const, embedding_disabled: true }, remote: false, sourceId: 'default', dryRun: false, logger: console };
+      const params = { turn_text: `A synthetic workshop record. ${withdrawn} ${novel}`, visibility: 'world', request_id: randomUUID() };
+      const first = await operationsByName.extract_facts.handler(ctx, params) as { inserted: number; duplicate: number; fact_ids: number[] };
+      expect(first).toMatchObject({ inserted: includeNovel ? 1 : 0, duplicate: 0 });
+      const active = await engine.executeRaw<{ id: number; fact: string }>('SELECT id,fact FROM facts WHERE expired_at IS NULL ORDER BY id');
+      expect(active.map(row => row.fact)).toEqual(includeNovel ? [novel] : []);
+      expect(first.fact_ids.map(Number)).toEqual(active.map(row => Number(row.id)));
+      const receipts = await engine.executeRaw<{ state: string; outcome: { kind: string; withdrawnSkipped?: number } }>(
+        "SELECT state,outcome FROM persistence_requests WHERE operation='extract_facts' ORDER BY sequence");
+      expect(receipts.map(row => [row.state, row.outcome.withdrawnSkipped])).toEqual([['committed', 1], ['committed', 1]]);
+      expect(await operationsByName.extract_facts.handler(ctx, params)).toEqual(first);
+      expect(calls).toBe(1);
+      await expect(operationsByName.remember.handler(ctx, { fact: withdrawn, entity: slug, visibility: 'world', provenance: 'Synthetic withdrawal regression.' })).rejects.toThrow('fact_withdrawn');
+    });
+  } finally { await disposePersistenceConsumer(engine); rmSync(home, { recursive: true, force: true }); }
+}, 60_000);
+
+test('managed extraction still refuses purged claims instead of counting them as withdrawals', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'gbrain-managed-purge-refusal-'));
+  try {
+    await withEnv({ GBRAIN_HOME: home }, async () => {
+      const slug = 'people/alice-example';
+      const purged = 'Alice-example has a synthetic obsolete workshop credential.';
+      const novel = 'Alice-example reserved the synthetic green room.';
+      const ctx = { engine, config: { engine: 'pglite' as const, embedding_disabled: true }, remote: false, sourceId: 'default', dryRun: false, logger: console };
+      await engine.putPage(slug, { type: 'person', title: 'Alice-example', compiled_truth: 'A registered synthetic person.' }, { sourceId: 'default' });
+      const saved = await engine.insertFact({ fact: purged, entity_slug: slug, visibility: 'world', kind: 'fact', source: 'fixture' }, { source_id: 'default' });
+      await registerLocalWriter(engine, 'cli');
+      const dry = await operationsByName.purge_fact.handler(ctx, { id: saved.id, dry_run: true }) as { confirm_token: string; expected_revision: string };
+      await operationsByName.purge_fact.handler(ctx, { id: saved.id, confirm: dry.confirm_token, expected_revision: dry.expected_revision, request_id: randomUUID() });
+      await engine.executeRaw('UPDATE persistence_brain SET enabled=true WHERE singleton=1');
+      __setChatTransportForTests(async () => ({
+        text: JSON.stringify({ facts: [purged, novel].map(fact => ({ fact, entity: slug, kind: 'fact', confidence: 1, notability: 'medium' })) }),
+        blocks: [], stopReason: 'end', usage: { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0 }, model: 'test:stub', providerId: 'test',
+      }));
+      await expect(operationsByName.extract_facts.handler(ctx, { turn_text: 'A synthetic workshop record.', visibility: 'world', request_id: randomUUID() }))
+        .rejects.toMatchObject({ code: 'purged_content' });
+      expect(await engine.executeRaw('SELECT fact FROM facts WHERE expired_at IS NULL')).toEqual([]);
     });
   } finally { await disposePersistenceConsumer(engine); rmSync(home, { recursive: true, force: true }); }
 }, 60_000);
