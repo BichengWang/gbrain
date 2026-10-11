@@ -162,18 +162,14 @@ describe.skipIf(!hasDatabase())('two consumers on one host (Postgres, #6317)', (
     await engine.executeRaw('DELETE FROM persistence_consumers');
     const make = () => new PersistenceConsumer(engine, { engine: 'postgres' }, preparePersistedMutation, { hostId, pollMs: 1_000_000, onError: () => {} });
     // "Both probe before either has written a row" is the precondition, not a race to win: each starter's first read
-    // returns only after both first reads have returned, so neither can write its row before the other's read ran.
+    // waits until the other's first read has started, so neither sees the row the other's start-up writes.
     const bothRead = Promise.withResolvers<void>();
     let firstReads = 0;
     const readTogether = () => {
       let first = true;
       return async (signal: AbortSignal) => {
-        if (!first) return listHostConsumers(engine, hostId, { signal });
-        first = false;
-        const rows = await listHostConsumers(engine, hostId, { signal });
-        if (++firstReads === 2) bothRead.resolve();
-        await bothRead.promise;
-        return rows;
+        if (first) { first = false; if (++firstReads === 2) bothRead.resolve(); await bothRead.promise; }
+        return listHostConsumers(engine, hostId, { signal });
       };
     };
     const a = new WaiterOnlyConsumer(engine, { engine: 'postgres' }, make, { kind: 'jobs', hostId, readConsumers: readTogether(), pollMs: 1_000_000, idleMaxMs: 1_000_000, heartbeatEveryMs: 1_000_000, log: () => {} });

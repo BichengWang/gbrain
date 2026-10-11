@@ -17,8 +17,7 @@ identifiers and attribution are available in the pre-removal Git revision
 ### Itemized changes
 
 - `test/write-gate-perf.slow.test.ts` (#6430) runs once per CI event in its own step of the `slow-entity-resolve-perf` job without `--coverage`, and `scripts/test-shard.sh` leaves it out of the unit matrix. Coverage instrumentation slowed the gate it measures, which made the 5 ms p95 budget fail on hypervisor-steal spikes. `BUDGET_MS`, `RATIO_LIMIT` and the quiet tolerance are unchanged. `test/scripts/test-shard.slow.test.ts` pins the file to exactly one workflow step with no `--coverage`.
-- `test/scripts/ci-gates.test.ts` no longer requires that file in the nightly coverage lane, since running it under coverage would bring the flake back, and pins its absence there.
-- `test/e2e/persistence-two-consumers-postgres.test.ts` T1b "two starters within one renewal" was a race: each starter's first read waited only until the other's read had started, so one could commit its consumer row before the other's query ran (`waiter_only` instead of `full`, seen once in a full gate). Each first read now returns only after both first reads have returned. Forced probe: delaying the second starter's query by 300 ms failed the old gate 3/3 with that signature and passes 3/3 now.
+- `test/scripts/ci-gates.test.ts` requires every slow file left out of the shards to also run in e2e.yml's nightly coverage-collection lane. write-gate-perf is the one named exception: it still runs on every pull request, push and schedule in test.yml's own no-coverage step, and the guard pins that it never appears in the coverage lane.
 
 ## [0.60.166.0] - 2026-10-11
 
