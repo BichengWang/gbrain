@@ -96,7 +96,12 @@ describe('CI execution evidence', () => {
     const excluded = [...shard.matchAll(/-not -name '([^']+\.slow\.test\.ts)'/g)].map(match => match[1]);
     expect(excluded.length).toBeGreaterThan(0);
     const slow = e2e.jobs['coverage-full-slow'].steps.map(step => step.run ?? '').join('\n');
-    for (const file of excluded) expect(slow).toContain(`bun test test/${file}`);
+    const timedWithoutCoverage = ['write-gate-perf.slow.test.ts'];
+    for (const file of excluded.filter(f => !timedWithoutCoverage.includes(f))) expect(slow).toContain(`bun test test/${file}`);
+    for (const file of timedWithoutCoverage) {
+      expect(excluded).toContain(file);
+      expect(slow).not.toContain(file);
+    }
   });
 });
 
